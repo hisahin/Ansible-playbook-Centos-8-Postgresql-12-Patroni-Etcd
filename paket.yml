@@ -1,0 +1,6 @@
+---
+- hosts: host1
+  tasks:
+    - name: paketci
+      apt: name=ranger state=installed
+      sudo: yes
