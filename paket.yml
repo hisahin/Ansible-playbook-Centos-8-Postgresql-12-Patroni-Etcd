@@ -1,6 +1,259 @@
----
-- hosts: host1
+- hosts: postgres
+  become: true
+  vars_prompt:
+    - name: "HOST1"
+      prompt: "adresi girin"
+      private: no
+
+    - name: "HOST2"
+      prompt: "adresi girin"
+      private: no
+
+  vars:
+    etcd_token: "postgres"
+    patroni_scope: "postgres"
+    patroni_namespace: "db"
+    patroni_hosts:
+    - { hn: host12, ip: "{{ HOST1 }}" }
+    - { hn: host13, ip: "{{ HOST2 }}" }
+    etcd_hosts:
+    - { hn: host12, ip: "{{ HOST1 }}" }
+    - { hn: host13, ip: "{{ HOST2 }}" }
   tasks:
-    - name: paketci
-      apt: name=ranger state=installed
-      sudo: yes
+    - name: ssl verify
+      lineinfile:
+        path: /etc/yum.conf
+        line: 'sslverify=0'
+
+    - name: nfs-client kurulum
+      yum:
+        name: "{{ packages }}"
+      vars:
+        packages:
+        - epel-release
+        - nfs-utils
+        - nfs4-acl-tools
+        - screen
+        - python36        
+
+    - name: firewall kapatma
+      yum:
+        name: firewalld
+        state: absent
+
+    - name: rsyslogrotate
+      lineinfile:
+        path: /etc/rsyslog.conf
+        line: '*.*                     @10.2.3.1'
+
+    - name: rsyslog yeniden baslat
+      service:
+        name: rsyslog
+        state: restarted
+
+    - name: nfs dizin yaratma
+      file:
+        path: /nfs/10.1.1.1
+        owner: root
+        group: root
+        mode: '0644'
+        state: directory
+
+    - name: nfs mount etme
+      mount:
+        path: /nfs/10.1.1.1
+        state: mounted
+        src: 10.1.1.1:/nfs/10.1.1.1
+        fstype: nfs
+
+    - name: postgresql repo ekleme
+      yum:
+        name: /nfs/10.1.1.1/packs/postgres/repo/pgdg-redhat-repo-latest.noarch.rpm
+        state: present
+
+    - name: disable module
+      shell: dnf -qy module disable postgresql
+      args:
+        warn: no
+
+    - name: postgresql sunucu kurulumu
+      yum:
+        name: "{{ packages }}"
+      vars:
+        packages:
+        - postgresql12
+        - postgresql12-server
+        - postgresql12-contrib
+        - postgresql12-devel
+        - pg_activity
+
+    - name: postgres data olusturma
+      file:
+        path: /pgdata/data      
+        owner: postgres
+        group: postgres
+        mode: '0700'
+        state: directory
+
+    - name: postgres log olusturma
+      file:
+        path: /pgdata/log
+        owner: postgres
+        group: postgres
+        mode: '0700'
+        state: directory
+
+    - name: patroni olusturma
+      file:
+        path: /etc/patroni
+        owner: postgres
+        group: postgres
+        mode: '0700'
+        state: directory
+
+    - name: patroni paketleri
+      yum:
+        name: /nfs/10.1.1.1/packs/python3-psycopg2/libpq-12.1-3.el8.x86_64.rpm
+        state: present
+    
+    - name: patroni paketleri2
+      yum:
+        name: /nfs/10.1.1.1/packs/python3-psycopg2/python3-psycopg2-2.8.5-2.rhel8.x86_64.rpm
+        state: present
+
+    - name: patroni paketleri3
+      shell: rpm -ivh /nfs/10.1.1.1/packs/patroni/patroni-1.6.0-1.rhel7.x86_64.rpm --nodeps
+
+    - name: kopyala
+      copy:
+        src: /nfs/10.1.1.1/packs/etcd/etcd
+        dest: /usr/local/bin/etcd
+
+    - name: kopyala2
+      copy:
+        src: /nfs/10.1.1.1/packs/etcd/etcdctl
+        dest: /usr/local/bin/etcdctl
+
+    - name: etcd kur
+      script: scripts/etcdkur.sh
+
+    - name: copy files
+      template: src={{item.src}} dest={{item.dest}} mode={{item.mode}}
+      with_items:
+        - { src: 'templates/etcd', dest: '/etc/default/etcd', mode: '644' }
+        - { src: 'templates/patroni.yml', dest: '/etc/patroni/patroni.yml', mode: '644' }
+        - { src: 'templates/patroni.service', dest: '/lib/systemd/system/patroni.service', mode: '644' }
+
+    - name: postgres kapat
+      service:
+        name: postgresql-12
+        enabled: no
+        state: stopped  
+        
+    - name: etcd baslat
+      service:
+        name: etcd
+        enabled: yes
+        state: restarted
+
+    - name: patroni baslat
+      service:
+        name: patroni
+        enabled: yes
+        state: started 
+
+- hosts: pgbouncer
+  become: true
+  vars:
+    etcd_token: "postgres"
+    patroni_scope: "postgres"
+    patroni_namespace: "db"
+    etcd_hosts:
+    - { hn: host12, ip: "{{ HOST1 }}" }
+    - { hn: host13, ip: "{{ HOST2 }}" }
+  tasks:
+    - name: nfs-client kurulum
+      yum:
+        name: "{{ packages }}"
+      vars:
+        packages:
+        - epel-release
+        - nfs-utils
+        - nfs4-acl-tools
+        - screen
+        - python36        
+
+    - name: firewall kapatma
+      yum:
+        name: firewalld
+        state: absent
+
+    - name: rsyslogrotate
+      lineinfile:
+        path: /etc/rsyslog.conf
+        line: '*.*                     @10.2.3.1'
+
+    - name: rsyslog yeniden baslat
+      service:
+        name: rsyslog
+        state: restarted
+
+    - name: nfs dizin yaratma
+      file:
+        path: /nfs/10.1.1.1
+        owner: root
+        group: root
+        mode: '0644'
+        state: directory
+
+    - name: nfs mount etme
+      mount:
+        path: /nfs/10.1.1.1
+        state: mounted
+        src: 10.1.1.1:/nfs/10.1.1.1
+        fstype: nfs
+
+    - name: postgresql repo ekleme
+      yum:
+        name: /nfs/10.1.1.1/packs/postgres/repo/pgdg-redhat-repo-latest.noarch.rpm
+        state: present
+
+    - name: disable module
+      shell: dnf -qy module disable postgresql
+      args:
+        warn: no
+
+    - name: install pgbouncer
+      yum:
+        name: pgbouncer
+        state: present
+    - name: rsyslogrotate
+      lineinfile:
+        path: /etc/rsyslog.conf
+        line: '*.*                     @10.2.3.1'
+    - name: copy template files
+      template: src={{item.src}} dest={{item.dest}} mode={{item.mode}}
+      with_items:
+        - { src: 'pgbouncer/pg_hba.conf', dest: '/etc/pgbouncer/pg_hba.conf', mode: '644' }
+        - { src: 'pgbouncer/userlist.txt', dest: '/etc/pgbouncer/userlist.txt', mode: '644' }
+        - { src: 'templates/pgbouncer.ini', dest: '/etc/pgbouncer/pgbouncer.ini', mode: '644' }
+      tags:
+        - sahin
+
+    - pause:
+        prompt: "sunucu ip gir "
+        echo: yes
+      register: result
+    
+    - name: degistir 
+      replace:
+        path: /etc/pgbouncer/pgbouncer.ini
+        regexp: 'bouncerimiz'
+        replace: "{{ result.user_input }}"
+
+    - name: pgbouncer baslat
+      service:
+        name: pgbouncer
+        enabled: yes
+        state: restarted
+
